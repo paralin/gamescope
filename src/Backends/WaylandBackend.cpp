@@ -37,6 +37,8 @@
 #include <xdg-toplevel-icon-v1-client-protocol.h>
 #include "wlr_end.hpp"
 
+#include "LibInputHandler.h"
+
 #include "drm_include.h"
 
 #define WL_FRACTIONAL_SCALE_DENOMINATOR 120
@@ -843,6 +845,11 @@ namespace gamescope
         wl_surface *m_pCursorSurface = nullptr;
         std::shared_ptr<INestedHints::CursorInfo> m_pDefaultCursorInfo;
         wl_surface *m_pDefaultCursorSurface = nullptr;
+
+
+        std::shared_ptr<CLibInputHandler> m_pLibInput;
+        CAsyncWaiter<CRawPointer<IWaitable>, 16> m_LibInputWaiter;
+
     };
     const wl_registry_listener CWaylandBackend::s_RegistryListener =
     {
@@ -1946,11 +1953,26 @@ namespace gamescope
     };
 
     CWaylandBackend::CWaylandBackend()
+		: m_LibInputWaiter{ "gamescope-libinput" }
     {
     }
 
     bool CWaylandBackend::Init()
     {
+
+		fprintf(stderr, "CWaylandBackend::Init Called");
+        if (g_bLibinputSelectedDevices.size() > 0) { 
+			std::unique_ptr<CLibInputHandler> pLibInput = std::make_unique<CLibInputHandler>();
+			if ( pLibInput->Init() ) {
+				m_pLibInput = std::move( pLibInput );
+				m_LibInputWaiter.AddWaitable( m_pLibInput.get() );
+			} else {
+				fprintf(stderr, "CWaylandBackend::Init failed: Unable to register LIBINPUT devices");
+				return false;
+			}
+		}
+
+
         g_nOutputWidth = g_nPreferredOutputWidth;
         g_nOutputHeight = g_nPreferredOutputHeight;
         g_nOutputRefresh = g_nNestedRefresh;
@@ -2890,6 +2912,8 @@ namespace gamescope
 
     void CWaylandInputThread::HandleKey( uint32_t uKey, bool bPressed )
     {
+        if (g_bKeyboardDisabled) return;
+
         if ( m_uKeyModifiers & m_uModMask[ GAMESCOPE_WAYLAND_MOD_META ] )
         {
             switch ( uKey )
@@ -3035,6 +3059,8 @@ namespace gamescope
 
 	void CWaylandInputThread::Wayland_Pointer_Enter( wl_pointer *pPointer, uint32_t uSerial, wl_surface *pSurface, wl_fixed_t fSurfaceX, wl_fixed_t fSurfaceY )
 	{
+		if (g_bMouseDisabled) return;
+
 		if ( !IsGamescopeToplevel( pSurface ) )
 			return;
 
@@ -3046,6 +3072,8 @@ namespace gamescope
 	}
 	void CWaylandInputThread::Wayland_Pointer_Leave( wl_pointer *pPointer, uint32_t uSerial, wl_surface *pSurface )
 	{
+		if (g_bMouseDisabled) return;
+
 		if ( !IsGamescopeToplevel( pSurface ) )
 			return;
 
@@ -3054,6 +3082,8 @@ namespace gamescope
 	}
 	void CWaylandInputThread::Wayland_Pointer_Motion( wl_pointer *pPointer, uint32_t uTime, wl_fixed_t fSurfaceX, wl_fixed_t fSurfaceY )
 	{
+		if (g_bMouseDisabled) return;
+
 		if ( !m_bMouseEntered )
 			return;
 
@@ -3088,6 +3118,8 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Pointer_Button( wl_pointer *pPointer, uint32_t uSerial, uint32_t uTime, uint32_t uButton, uint32_t uState )
     {
+        if (g_bMouseDisabled) return;
+
         // Don't do any motion/movement stuff if we don't have kb focus
         if ( !cv_wayland_mouse_warp_without_keyboard_focus && !m_bKeyboardEntered )
             return;
@@ -3111,6 +3143,8 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Pointer_Axis_Value120( wl_pointer *pPointer, uint32_t uAxis, int32_t nValue120 )
     {
+        if (g_bMouseDisabled) return;
+
         if ( !cv_wayland_mouse_warp_without_keyboard_focus && !m_bKeyboardEntered )
             return;
 
@@ -3121,6 +3155,8 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Pointer_Frame( wl_pointer *pPointer )
     {
+        if (g_bMouseDisabled) return;
+
         defer( m_uAxisSource = WL_POINTER_AXIS_SOURCE_WHEEL );
         double flX = m_flScrollAccum[0];
         double flY = m_flScrollAccum[1];
@@ -3175,6 +3211,8 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Keyboard_Enter( wl_keyboard *pKeyboard, uint32_t uSerial, wl_surface *pSurface, wl_array *pKeys )
     {
+		if (g_bKeyboardDisabled) return;
+
 		if ( !IsGamescopeToplevel( pSurface ) )
 			return;
 
@@ -3201,6 +3239,8 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Keyboard_Leave( wl_keyboard *pKeyboard, uint32_t uSerial, wl_surface *pSurface )
     {
+		if (g_bKeyboardDisabled) return;
+
 		if ( !IsGamescopeToplevel( pSurface ) )
 			return;
 
@@ -3214,6 +3254,8 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Keyboard_Key( wl_keyboard *pKeyboard, uint32_t uSerial, uint32_t uTime, uint32_t uKey, uint32_t uState )
     {
+        if (g_bKeyboardDisabled) return;
+
         if ( !m_bKeyboardEntered )
             return;
 
@@ -3241,6 +3283,8 @@ namespace gamescope
 
     void CWaylandInputThread::Wayland_RelativePointer_RelativeMotion( zwp_relative_pointer_v1 *pRelativePointer, uint32_t uTimeHi, uint32_t uTimeLo, wl_fixed_t fDx, wl_fixed_t fDy, wl_fixed_t fDxUnaccel, wl_fixed_t fDyUnaccel )
     {
+		if (g_bMouseDisabled) return;
+
 		// Don't do any motion/movement stuff if we don't have kb focus
 		if ( !m_pBackend->m_bPointerLocked || ( !cv_wayland_mouse_relmotion_without_keyboard_focus && !m_bKeyboardEntered ) )
 			return;
